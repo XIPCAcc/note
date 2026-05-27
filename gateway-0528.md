@@ -11,7 +11,75 @@
 
 猜想的因素
 1. 一个在uintr_wait等待 和 另一个在epoll_wait等待，但是阻塞线程的wake路径更长（不清楚是否还要经过epoll wait唤醒睡眠的协程）
+验证方式，查看代码 wake最后调用的都是 vttable的wake_by_val
+```
+    pub(super) fn wake_by_val(&self) {
+        use super::state::TransitionToNotifiedByVal;
+
+        match self.state().transition_to_notified_by_val() {
+            TransitionToNotifiedByVal::Submit => {
+                // 调用wake后，如果可以提交，就调用schedule把任务放回队列中
+                self.schedule();
+
+                // Now that we have completed the call to schedule, we can
+                // release our ref-count.
+                self.drop_reference();
+            }
+        }
+    }
+```
+
+因为
+```
+eventfd 方案:
+  对端写 eventfd → epoll_wait 返回（I/O driver, worker 线程）
+      → io.wake → WakeList → waker.wake → schedule_local → 本地队列
+
+uintr 方案:
+  对端 senduipi → handler(uintr_received=1) → uintr_wait 返回（blocking 线程）
+      → set_pending → waker.wake → push_remote → eventfd(再次!) → epoll_wait
+      → worker 线程醒来 → schedule 注入队列
+```
+```
+blocking spawn waker.wake()
+│
+├─ waker.wake() → wake_by_val → RawTask::wake_by_val → schedule
+│
+├─ schedule_task(task, false)
+│    │
+│    ├─ with_current → 不是 worker 线程
+│    │
+│    ├─ push_remote_task            → Mutex<Synced> → inject 队列
+│    │
+│    └─ notify_parked_remote        → worker_to_notify
+│         └─ remotes[i].unpark()    → state.swap(NOTIFIED)
+│              └─ driver.unpark()   → eventfd.write() ← SYSCALL!
+│                                        ↓
+│                                   worker 线程 epoll_wait 返回
+│                                        ↓
+│                                   上下文切换 → 调度注入队列 → 执行
+│
+└─ 延迟: （本质上还是要走一次eventfd + 上下文切换）
+
+tokio I/O driver io.wake(ready)（来自 worker 线程自身）
+│
+├─ ScheduledIo::wake → WakeList 收集 waker
+│   └─ waker.wake() → schedule
+│
+├─ schedule_task(task, false)
+│    │
+│    ├─ with_current → 当前是 worker 线程
+│    │
+│    └─ schedule_local(core, task)
+│         └─ run_queue.push_front  → lock-free 本地队列
+│              → 无需 notify（worker 知道自己有活）
+│
+└─ 
+```
+
 2. 阻塞线程方案需要单独的核运行这个唤醒任务，相比其他方案少了一个核的算力。
+验证：阻塞线程方案一共运行 16 worker thread，1个Blocking thread，其他方式只运行16个worker thread，而系统只有16个核。
+现在的方式已经通过提前绑定核的方式把16核预留给了 uintr wait。epoll方式直接少用一个核，比较下来uintr还占优势了。
 
 ```
 ====================================================================================================
@@ -194,4 +262,21 @@
    128         5899.2         6068.7         4774.8           0.97x           1.24x
    256         5969.9         6061.9         5766.9           0.98x           1.04x
 
+```
+
+# 阻塞线程处理中断的缺点反思
+
+原本是想通过这个方式解决self pipe的 sys write问题，但是在阻塞线程wake worker上面的协程的时候还是引入了sys write 开销。
+
+我们的目标是发送给运行 epoll_wait的worker thread。
+如果每个 worker 注册自己的 UPID、gateway确实可以做到将用户态中断发送给具体的worker thread，但是不清楚哪个worker thread最后会运行epoll_wait。
+
+这个是目前最大的痛点。
+
+```
+Worker 0:  尝试拿 driver 锁 → 拿到了 → epoll_wait(所有注册的 fd)
+Worker 1:  尝试拿 driver 锁 → 没拿到 → condvar.wait(futex)
+Worker 2:  尝试拿 driver 锁 → 没拿到 → condvar.wait(futex)
+...
+Worker 15: 尝试拿 driver 锁 → 没拿到 → condvar.wait(futex)
 ```
