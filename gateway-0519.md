@@ -292,3 +292,52 @@ QPS 详细数据
 3. **目标核心的 UIPI handler 被反复调用**：handler 执行期间新 UIPI 被阻塞/排队
 
 **1 秒钟内**，这些效应还在容忍范围内，seq 计数器的补救机制能兜底。**1 分钟内**，累积的硬件排队延迟、内核队列竞争等导致延迟指数级增长，最终表现为吞吐量崩溃。
+
+# 运行都某个时刻会出现 uintr死锁问题
+
+即两边都在等待对方的用户态中断，backend 17.671158Z开始进入等待状态，gateway 17.671180Z进入等待状态。
+后来gateway也发送过三次用户态中断，但是都没能把backend唤醒
+
+```
+2026-05-24T15:08:17.671158Z  WARN backend::shm_server_uintr: wait_for_uintr: 开始异步等待 UINTR 中断...
+2026-05-24T15:08:17.671171Z  WARN gateway::shm_transport_uintr: Sending UINTR notification with UIPI index: 0
+2026-05-24T15:08:17.671175Z  WARN gateway::shm_transport_uintr: wait_for_uintr: 收到 UINTR 中断
+2026-05-24T15:08:17.671180Z  WARN gateway::shm_transport_uintr: wait_for_uintr: 开始异步等待 UINTR 中断...
+2026-05-24T15:08:17.671183Z  WARN gateway::shm_transport_uintr: SHM: 84us
+2026-05-24T15:08:17.671211Z  WARN gateway::shm_transport_uintr: Sending UINTR notification with UIPI index: 0
+2026-05-24T15:08:17.671217Z  WARN gateway::shm_transport_uintr: Sending UINTR notification with UIPI index: 0
+2026-05-24T15:08:17.671220Z  WARN gateway::shm_transport_uintr: Sending UINTR notification with UIPI index: 0
+2026-05-24T15:09:03.445272Z  WARN gateway: Error serving connection from 127.0.0.1:42828: connection closed before message completed
+```
+
+```
+2026-05-24T15:20:59.815945Z  WARN backend::shm_server_uintr: wait_for_uintr: 开始异步等待 UINTR 中断...
+2026-05-24T15:20:59.815998Z  WARN backend::shm_server_uintr: wait_for_uintr: 收到 UINTR 中断
+2026-05-24T15:20:59.816003Z  WARN gateway::shm_transport_uintr: Sending UINTR notification with UIPI index: 0
+2026-05-24T15:20:59.816008Z  WARN backend::shm_server_uintr: >>> send_uintr_notification: sending UIPI index=0
+2026-05-24T15:20:59.816015Z  WARN backend::shm_server_uintr: wait_for_uintr: 开始异步等待 UINTR 中断...
+
+2026-05-24T15:20:59.816019Z  WARN gateway::shm_transport_uintr: Sending UINTR notification with UIPI index: 0
+2026-05-24T15:20:59.816027Z  WARN gateway::shm_transport_uintr: wait_for_uintr: 收到 UINTR 中断
+2026-05-24T15:20:59.816027Z  WARN gateway::shm_transport_uintr: UINTR: process_global_uintr_wakers returned 1 (wake_cnt: 413 -> 414, +1)
+2026-05-24T15:20:59.816034Z  WARN gateway::shm_transport_uintr: wait_for_uintr: 开始异步等待 UINTR 中断...
+
+2026-05-24T15:20:59.816037Z  WARN gateway::shm_transport_uintr: Sending UINTR notification with UIPI index: 0
+2026-05-24T15:20:59.816058Z  WARN gateway::shm_transport_uintr: Sending UINTR notification with UIPI index: 0
+2026-05-24T15:20:59.816097Z  WARN gateway::shm_transport_uintr: Sending UINTR notification with UIPI index: 0
+
+// 系统死锁在这里，gateway把所有请求都写入了共享内存，并且发送了三次用户态中断，但是backend process_global_uintr_wakers 却无法唤醒此线程
+2026-05-24T15:20:59.815987Z  WARN backend::shm_server_uintr: UINTR: process_global_uintr_wakers returned 0 (wake_cnt: 418 -> 418, +0)
+
+2026-05-24T15:21:09.816108Z  WARN gateway::shm_transport_uintr: UINTR blocking wait: timeout (no interrupt in window)
+2026-05-24T15:21:09.816184Z  WARN backend::shm_server_uintr: UINTR blocking wait: timeout (no interrupt in window)
+2026-05-24T15:21:19.816226Z  WARN gateway::shm_transport_uintr: UINTR blocking wait: timeout (no interrupt in window)
+2026-05-24T15:21:19.816293Z  WARN backend::shm_server_uintr: UINTR blocking wait: timeout (no interrupt in window)
+2026-05-24T15:21:29.816294Z  WARN gateway::shm_transport_uintr: UINTR blocking wait: timeout (no interrupt in window)
+2026-05-24T15:21:29.816360Z  WARN backend::shm_server_uintr: UINTR blocking wait: timeout (no interrupt in window)
+2026-05-24T15:21:39.816393Z  WARN gateway::shm_transport_uintr: UINTR blocking wait: timeout (no interrupt in window)
+2026-05-24T15:21:39.816461Z  WARN backend::shm_server_uintr: UINTR blocking wait: timeout (no interrupt in window)
+2026-05-24T15:21:49.816498Z  WARN gateway::shm_transport_uintr: UINTR blocking wait: timeout (no interrupt in window)
+2026-05-24T15:21:49.816571Z  WARN backend::shm_server_uintr: UINTR blocking wait: timeout (no interrupt in window)
+2026-05-24T15:21:59.276608Z  WARN gateway: Error serving connection from 127.0.0.1:47720: connection closed before message completed
+```
