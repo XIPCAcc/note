@@ -13,7 +13,18 @@
 同时去掉 中断处理程序中的 pipe write。
 
 
+![方案三](./images/Blocking-coroutine.png)
+
+思路二: 直接用uintr_wait 代替 epoll_wait
+
+![方案二](./images/uintr-wait.png)
+
+
 # 测试结果
+
+此实验结果为方案三测试结果。
+
+https://github.com/XIPCAcc/Gateway-gRPC/tree/uintr-7
 
 1s 压力测试结果
 
