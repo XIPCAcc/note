@@ -34,13 +34,14 @@ Embassy 的假设条件比 Tokio 多：
 
 Tokio 要面对的场景是：任意线程可以 spawn 任务、任意线程可以持有 JoinHandle、任务可能被 abort、多线程同时竞争 waker……
 
-能在中断里安全操作任务状态，靠的是三个设计。
+
+# 能在中断里安全操作任务状态，靠的是三个设计
 
 1. 原子状态位（无锁）
 
 TaskHeader::state的操作没有任何 mutex：
 
-2. 无锁 RunQueue（链表栈）
+2. 无锁 RunQueue
 
 RunQueue，中断里推入任务不需要等待：
 
@@ -100,6 +101,12 @@ RefCell 的 运行时借用冲突 ：中断处理函数打断了正在 borrow �
 
 Embassy采用UnsafeCell
 UnsafeCell 没有任何运行时检查 ， .get() 直接返回裸指针。这里靠的不是"借检查"，而是程序员+临界区来保证安全。
+```rust
+#[cfg(not(target_has_atomic = "ptr"))]
+struct MutexTransferStack<T: Linked<cordyceps::stack::Links<T>>> {
+    inner: critical_section::Mutex<core::cell::UnsafeCell<cordyceps::Stack<T>>>,
+}
+```
 
 对于有原子指令的Embassy则直接采用原子指令。配置cordyceps crate，直接用里面实现的push_was_empty()
 TransferStack（ Treiber栈无锁数据结构）
@@ -114,8 +121,6 @@ Embassy 的 RunQueue:
   dequeue_all():
     head.swap(null)          ← 原子指令
     不需要 borrow
-
-  → 无论谁、在什么时机调用 enqueue，都不会冲突
 
 
 Tokio  的 RunQueue:
@@ -141,3 +146,9 @@ Tokio  的 RunQueue:
 | 遍历 | 单链表遍历 | Vec pop，连续内存，缓存友好 |
 
 `Vec` 天然需要 `&mut self` 来 push/pop。Rust 的标准 `Mutex` 太重了，Tokio 选了 `RefCell` 做轻量保护——代价就是不能嵌套 borrow。
+
+## 为什么不改动 Embassy支持用户态中断
+
+Embassy虽然可以支持在std目标（Linux/桌面）运行
+(可以用 executor-thread 特性创建多个系统线程，每个线程运行自己的executor)
+但是Embassy不提供统一的多核调度器，任务绑定Executor，也没有任务窃取之类的，任务创建了以后只能一直在一个Executor运行。
