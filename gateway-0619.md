@@ -1,0 +1,167 @@
+# 主线程负责主要负责接收和处理中断，并唤醒协程
+
+```
+Matrix Multiplication Performance Comparison
+===========================================
+Date: Thu Jun 18 09:06:09 PM CST 2026
+
+Matrix Sizes: 2 4 8 16 32 64 128 256 512
+Concurrencies: 8 16 32 64 128 256 512 1024 2048
+Test Duration: 15s each
+
+Transport    Matrix   Concurrency  QPS(req/s)     AvgLat(ms)     P99Lat(ms)    
+---------    ------   ----------   ----------     ----------     ----------    
+
+shm-eventfd  2x2      8            113675.81      77.41us        427.00us      
+shm-eventfd  2x2      16           147593.00      113.57us       457.00us      
+shm-eventfd  2x2      32           32886.58       211.86us       578.00us      
+shm-eventfd  2x2      64           150251.89      423.68us       0.92ms        
+shm-eventfd  2x2      128          168430.24      752.38us       1.49ms        
+shm-eventfd  2x2      256          178842.51      1.42ms         2.63ms        
+shm-eventfd  2x2      512          178214.21      2.85ms         4.86ms        
+shm-eventfd  2x2      1024         177561.98      5.58ms         9.14ms        
+shm-eventfd  2x2      2048         171297.11      10.83ms        16.39ms       
+shm-eventfd  4x4      8            41750.59       75.55us        354.00us      
+shm-eventfd  4x4      16           8044.28        115.78us       428.00us      
+shm-eventfd  4x4      32           132453.04      243.07us       628.00us      
+shm-eventfd  4x4      64           139895.80      455.65us       0.97ms        
+shm-eventfd  4x4      128          156814.76      810.58us       1.56ms        
+shm-eventfd  4x4      256          167321.02      1.52ms         2.87ms        
+shm-eventfd  4x4      512          168206.18      3.02ms         4.93ms        
+shm-eventfd  4x4      1024         165116.64      6.22ms         9.56ms        
+shm-eventfd  4x4      2048         160986.44      14.38ms        24.15ms       
+shm-eventfd  8x8      8            96689.50       90.82us        467.00us      
+shm-eventfd  8x8      16           23410.49       135.08us       410.00us      
+shm-eventfd  8x8      32           119014.47      270.40us       679.00us      
+shm-eventfd  8x8      64           127679.78      500.38us       1.04ms        
+shm-eventfd  8x8      128          139102.55      0.92ms         1.74ms        
+shm-eventfd  8x8      256          145357.23      1.75ms         3.23ms        
+shm-eventfd  8x8      512          144528.89      3.47ms         5.70ms        
+shm-eventfd  8x8      1024         138007.36      7.27ms         10.84ms       
+shm-eventfd  8x8      2048         132368.06      14.88ms        20.77ms       
+shm-eventfd  16x16    8            73111.03       116.99us       508.00us      
+shm-eventfd  16x16    16           90005.82       183.75us       604.00us      
+shm-eventfd  16x16    32           94697.44       340.53us       0.86ms        
+shm-eventfd  16x16    64           93923.85       681.75us       1.40ms        
+shm-eventfd  16x16    128          93783.11       1.37ms         2.62ms        
+shm-eventfd  16x16    256          93781.32       2.71ms         5.12ms        
+shm-eventfd  16x16    512          90719.97       5.57ms         8.77ms        
+shm-eventfd  16x16    1024         80993.37       11.62ms        16.04ms       
+shm-eventfd  16x16    2048         81436.11       24.02ms        34.98ms       
+shm-eventfd  32x32    8            43667.97       187.76us       593.00us      
+shm-eventfd  32x32    16           56190.52       290.56us       835.00us      
+shm-eventfd  32x32    32           62070.81       522.41us       1.31ms        
+shm-eventfd  32x32    64           56403.58       1.14ms         2.53ms        
+shm-eventfd  32x32    128          52652.95       2.43ms         5.22ms        
+shm-eventfd  32x32    256          51941.81       4.91ms         9.65ms        
+shm-eventfd  32x32    512          12049.89       9.78ms         18.02ms       
+shm-eventfd  32x32    1024         47973.92       20.72ms        31.83ms       
+shm-eventfd  32x32    2048         45630.00       43.39ms        58.07ms       
+shm-eventfd  64x64    8            16254.92       496.08us       1.27ms        
+shm-eventfd  64x64    16           22727.26       719.47us       2.01ms        
+shm-eventfd  64x64    32           29837.06       1.09ms         2.90ms        
+shm-eventfd  64x64    64           28706.56       2.27ms         5.74ms        
+shm-eventfd  64x64    128          26438.21       4.90ms         10.83ms       
+shm-eventfd  64x64    256          22453.46       11.47ms        22.38ms       
+shm-eventfd  64x64    512          21730.14       23.22ms        41.66ms       
+shm-eventfd  64x64    1024         21465.25       46.03ms        73.13ms       
+shm-eventfd  64x64    2048         20569.64       91.48ms        153.08ms      
+shm-eventfd  128x128  8            3178.15        2.61ms         7.93ms        
+shm-eventfd  128x128  16           5110.01        3.20ms         8.22ms        
+shm-eventfd  128x128  32           5909.08        5.45ms         11.31ms       
+shm-eventfd  128x128  64           5843.80        11.02ms        22.93ms       
+shm-eventfd  128x128  128          5789.07        22.54ms        56.30ms       
+shm-eventfd  128x128  256          5649.21        46.81ms        151.23ms      
+shm-eventfd  128x128  512          5491.51        94.19ms        320.11ms      
+shm-eventfd  128x128  1024         5136.74        199.07ms       644.22ms      
+shm-eventfd  128x128  2048         5100.04        327.31ms       927.51ms      
+shm-eventfd  256x256  8            423.77         19.65ms        60.47ms       
+shm-eventfd  256x256  16           700.87         23.53ms        65.02ms       
+shm-eventfd  256x256  32           730.29         44.07ms        94.68ms       
+shm-eventfd  256x256  64           725.03         88.72ms        209.57ms      
+shm-eventfd  256x256  128          726.63         176.58ms       427.45ms      
+shm-eventfd  256x256  256          705.57         367.49ms       1.10s         
+shm-eventfd  512x512  8            40.68          209.44ms       753.66ms      
+shm-eventfd  512x512  16           63.23          270.38ms       971.68ms      
+shm-eventfd  512x512  32           64.22          494.82ms       1.23s         
+shm-eventfd  512x512  64           63.58          957.67ms       1.74s         
+shm-eventfd  512x512  128          61.68          1.59s          1.99s         
+shm-eventfd  512x512  256          60.34          1.65s          1.99s         
+
+shm-uintr    2x2      8            10072.77       57.93us        235.00us      
+shm-uintr    2x2      16           171620.76      100.82us       484.00us      
+shm-uintr    2x2      32           169393.53      192.14us       583.00us      
+shm-uintr    2x2      64           177079.69      359.75us       839.00us      
+shm-uintr    2x2      128          195077.56      647.03us       1.28ms        
+shm-uintr    2x2      256          212737.84      1.20ms         2.29ms        
+shm-uintr    2x2      512          215415.27      2.33ms         3.87ms        
+shm-uintr    2x2      1024         207931.78      4.78ms         7.01ms        
+shm-uintr    2x2      2048         195429.16      10.62ms        15.53ms       
+shm-uintr    4x4      8            31736.37       67.01us        335.00us      
+shm-uintr    4x4      16           36601.29       101.35us       428.00us      
+shm-uintr    4x4      32           5637.96        205.36us       592.00us      
+shm-uintr    4x4      64           164116.61      388.33us       0.88ms        
+shm-uintr    4x4      128          183156.33      691.22us       1.33ms        
+shm-uintr    4x4      256          199539.37      1.27ms         2.42ms        
+shm-uintr    4x4      512          198088.27      2.53ms         4.10ms        
+shm-uintr    4x4      1024         193215.81      5.12ms         7.77ms        
+shm-uintr    4x4      2048         179236.84      11.01ms        15.43ms       
+shm-uintr    8x8      8            14431.23       82.54us        434.00us      
+shm-uintr    8x8      16           139881.17      120.73us       493.00us      
+shm-uintr    8x8      32           137655.87      235.60us       656.00us      
+shm-uintr    8x8      64           141802.22      449.86us       0.97ms        
+shm-uintr    8x8      128          158020.45      804.18us       1.52ms        
+shm-uintr    8x8      256          167034.10      1.52ms         2.83ms        
+shm-uintr    8x8      512          166755.30      3.02ms         4.71ms        
+shm-uintr    8x8      1024         158496.17      6.36ms         8.72ms        
+shm-uintr    8x8      2048         148575.53      13.38ms        19.37ms       
+shm-uintr    16x16    8            14022.94       102.39us       431.00us      
+shm-uintr    16x16    16           96941.83       172.64us       612.00us      
+shm-uintr    16x16    32           101767.47      318.91us       0.86ms        
+shm-uintr    16x16    64           99205.40       644.93us       1.38ms        
+shm-uintr    16x16    128          97762.81       1.31ms         2.62ms        
+shm-uintr    16x16    256          99717.41       2.55ms         5.08ms        
+shm-uintr    16x16    512          96467.48       5.30ms         8.49ms        
+shm-uintr    16x16    1024         91277.28       10.77ms        14.73ms       
+shm-uintr    16x16    2048         86581.01       22.65ms        30.38ms       
+shm-uintr    32x32    8            43580.05       188.63us       601.00us      
+shm-uintr    32x32    16           52393.50       315.07us       0.98ms        
+shm-uintr    32x32    32           56534.65       578.31us       1.63ms        
+shm-uintr    32x32    64           53334.82       1.21ms         3.11ms        
+shm-uintr    32x32    128          51181.63       2.50ms         5.65ms        
+shm-uintr    32x32    256          52862.60       4.82ms         9.80ms        
+shm-uintr    32x32    512          51482.59       9.76ms         15.86ms       
+shm-uintr    32x32    1024         49966.95       19.86ms        27.76ms       
+shm-uintr    32x32    2048         48277.45       41.16ms        56.49ms       
+shm-uintr    64x64    8            17271.22       468.87us       1.24ms        
+shm-uintr    64x64    16           22654.48       724.45us       2.10ms        
+shm-uintr    64x64    32           28004.67       1.17ms         3.18ms        
+shm-uintr    64x64    64           29153.28       2.22ms         5.67ms        
+shm-uintr    64x64    128          27430.07       4.71ms         11.28ms       
+shm-uintr    64x64    256          24557.80       10.29ms        21.33ms       
+shm-uintr    64x64    512          21949.64       22.89ms        43.39ms       
+shm-uintr    64x64    1024         21724.83       44.86ms        69.37ms       
+shm-uintr    64x64    2048         19893.35       97.22ms        151.74ms      
+shm-uintr    128x128  8            3176.50        2.63ms         8.01ms        
+shm-uintr    128x128  16           4853.39        3.36ms         8.68ms        
+shm-uintr    128x128  32           5639.85        5.72ms         12.78ms       
+shm-uintr    128x128  64           5720.14        11.31ms        24.78ms       
+shm-uintr    128x128  128          5620.63        22.99ms        52.08ms       
+shm-uintr    128x128  256          5486.33        48.23ms        143.48ms      
+shm-uintr    128x128  512          5326.26        95.29ms        236.49ms      
+shm-uintr    128x128  1024         5060.31        198.79ms       588.40ms      
+shm-uintr    128x128  2048         4819.64        372.67ms       836.44ms      
+shm-uintr    256x256  8            422.41         19.87ms        59.97ms       
+shm-uintr    256x256  16           701.40         23.47ms        63.07ms       
+shm-uintr    256x256  32           735.22         45.11ms        131.27ms      
+shm-uintr    256x256  64           725.41         97.06ms        351.14ms      
+shm-uintr    256x256  128          719.98         199.74ms       759.04ms      
+shm-uintr    256x256  256          701.90         393.74ms       1.45s         
+shm-uintr    512x512  8            45.66          177.96ms       463.87ms      
+shm-uintr    512x512  16           64.04          265.92ms       974.43ms      
+shm-uintr    512x512  32           64.23          492.53ms       1.39s         
+shm-uintr    512x512  64           63.20          740.17ms       1.94s         
+shm-uintr    512x512  128          63.31          889.67ms       1.94s         
+shm-uintr    512x512  256          60.00          839.13ms       1.93s         
+
+```
