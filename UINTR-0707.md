@@ -264,7 +264,7 @@ senduipi的动作，设置接收方的UPID.PIR[UITTE.UV] = 1，置UPID.ON 为1�
 
 但是 CPU检测到 CPL == 0，把用户态中断当成普通中断执行，跳转到IDT DEFINE_IDTENTRY_SYSVEC(sysvec_uintr_notification)，里面只做EOI。
 
-等到从内核态返回用户态，iret后 CPL变为3，CPU检测到 CPL == 3 && UIF == 1 && UIRR != 0 时候，触发（1）的流程
+等到从内核态返回用户态，发送一次self IPI，由于此时是关中断状态，不会触发中断处理逻辑，x86 上 sti 之后有一条"指令间隙"规则—— sti 后面的 一条指令 不可被中断打断。 iret 就是 sti 后面的那条指令，所以 self-IPI 不会 在 sti 和 iret 之间插入。iret后 CPL变为3，CPU检测到 CPL == 3 && UIF == 1 && UIRR != 0 时候，触发（1）的流程
 
 （3）如果接收方处于阻塞态，也就是接收方schedule，context_switch了，此时接收方不在核上运行。内核在contex_switch的路径中把 UPID.SN = 1，senduipi依然设置接收方的UPID.PIR[UITTE.UV] = 1，置UPID.ON 为1。但是因为SN=1，所以不发送 IPI。等到接收方再次schedule回来，再次设置UPID.SN = 0，同时检查PIR，不为0，则发送一个self IPI，触发（2）的流程。
 
