@@ -367,3 +367,99 @@ void uintr_wake_up_process(void)
 }
 
 ```
+
+解释这个疑问
+```c
+/* Suppress notifications since this task is being context switched out */
+void switch_uintr_prepare(struct task_struct *prev)
+{
+	
+	/*
+	 * A task being interruptible is a dynamic state. Need synchronization
+	 * in schedule() along with singal_pending_state() to avoid blocking if
+	 * a UINTR is pending
+	 */
+	if (IS_ENABLED(CONFIG_X86_UINTR_BLOCKING) &&
+	    is_uintr_waiting_enabled(prev) &&
+	    task_is_interruptible(prev)) {
+		if (!is_uintr_waiting_cost_sender(prev)) {
+			uintr_switch_to_kernel_interrupt(upid_ctx);
+			return;
+		}
+
+		uintr_set_blocked_upid_bit(upid_ctx);
+	}
+
+	set_bit(UINTR_UPID_STATUS_SN, (unsigned long *)&upid_ctx->upid->nc.status);
+}
+```
+
+## switch_uintr_prepare() 中 SN 的设置逻辑
+
+会设置 SN 的情况 （set_bit(UINTR_UPID_STATUS_SN, ...) ）：
+
+以下 所有条件不满足 时，才走到设置 SN：
+
+1. CONFIG_X86_UINTR_BLOCKING 未启用， 或者
+2. waiting_cost == UPID_WAITING_COST_NONE （即等待未启用）， 或者
+3. prev 任务 不可中断 （非 TASK_INTERRUPTIBLE 状态）
+
+不会设置 SN 的情况 （提前 return）：
+
+当三个条件 全部满足 时（ CONFIG_X86_UINTR_BLOCKING 已启用 && 等待已启用 && 任务可中断），再根据 waiting_cost 细分
+
+| `waiting_cost` | 动作 | 是否设置 SN |
+|---|---|---|
+| `UPID_WAITING_COST_NONE` | 不进入 if 分支 | **设置 SN**（走第 1356 行） |
+| 非 `UPID_WAITING_COST_SENDER`（即 receiver 侧等待） | 调用 `uintr_switch_to_kernel_interrupt()` | **不设置 SN**，直接 return |
+| `UPID_WAITING_COST_SENDER` | 调用 `uintr_set_blocked_upid_bit()` | **不设置 SN**，直接 return |
+
+
+uintr_switch_to_kernel_interrupt和uintr_set_blocked_upid_bit两者都用于任务可中断睡眠时的 UINTR 等待，但机制完全不同：
+
+## `uintr_switch_to_kernel_interrupt()` — Receiver 侧等待
+
+1. **修改通知向量**：把 UPID 的 `nv` 从用户态通知向量改为 `UINTR_KERNEL_VECTOR`，让硬件中断路由到**内核**
+2. **加入等待链表**：挂到 `uintr_wait_list`，内核收到中断后可以据此唤醒任务
+3. **不设 SN，不设 BLKD**：通知不被抑制，也不阻塞，而是**重定向到内核**处理
+
+核心思想：中断到来时，硬件仍会产生通知，只是送到内核而非用户态，内核负责唤醒睡眠的 receiver。
+
+## `uintr_set_blocked_upid_bit()` — Sender 侧等待
+
+1. **设置 BLKD 位**：在 UPID status 中置 `UINTR_UPID_STATUS_BLKD`
+2. **标记 waiting**：`upid_ctx->waiting = true`
+3. **不加入链表，不改 nv**：不需要内核介入
+
+核心思想：sender 发送 UIPI 时，如果目标被 BLKD，硬件会将发送者挂起（等待），直到目标 receiver 恢复后清除 BLKD 位。这是利用硬件本身的阻塞-等待机制。
+
+## 关键区别
+
+| | Receiver 侧等待 | Sender 侧等待 |
+|---|---|---|
+| 机制 | 中断重定向到内核 | 硬件 BLKD 位阻塞 |
+| 谁等待 | **内核替 receiver 等**，收到中断后唤醒 receiver | **硬件让 sender 等**，receiver 恢复后 sender 自动继续 |
+| 数据结构 | 需要内核链表追踪 | 无需内核追踪 |
+| 开销 | 内核中断处理 + 唤醒 | 硬件自动挂起 sender |
+| 适用场景 | receiver 睡眠时希望中断能唤醒它 | sender 频繁发送，不希望 receiver 被唤醒的开销 |
+
+          
+BLKD 是 UPID（User Interrupt Posted Descriptor）status 字段中的一个位：
+
+| 位 | 名称 | 含义 |
+|---|---|---|
+| bit 0 | **ON** | Outstanding Notification — 有待处理的通知 |
+| bit 1 | **SN** | Suppressed Notification — 抑制通知（任务被切换出时设置，避免无用中断） |
+| bit 7 | **BLKD** | **Blocked** — 阻塞，表示 receiver 在等待内核处理 |
+
+**BLKD 的作用**：当 receiver 任务可中断睡眠且 `waiting_cost == SENDER` 时，内核设置 BLKD 位。此时硬件的 UIPI 发送机制会：
+- 不向 receiver 发送中断（receiver 在睡眠，发了也白发）
+- **将 sender 挂起**（硬件自动阻塞 sender 的 UIPI 指令），直到 receiver 恢复后内核清除 BLKD 位
+
+BLKD (bit 7) 是 Linux 内核自己占用了 status 字段中的保留位，用作软件标志。证据如下：
+
+- 触发方式 ： SENDUIPI 指令遇到 BLKD 位时产生的是 #GP（General Protection Fault） ，然后内核在 #GP handler（ traps.c:533 ）中用软件方式处理——清除 BLKD、设置 ON、唤醒 receiver。这是纯软件模拟，不是硬件行为。
+
+- 代码中的 TODO 也印证了这一点—— traps.c:523 注释 /* TODO: Confirm: Can we come here because of a GP not related to UPID Blocked? */ ，说明内核也不确定 #GP 是否全是因为 BLKD，因为这个位并非硬件规范的一部分。
+
+- 注释说"Blocked waiting for kernel" ，而非引用任何 Intel 规范章节。
