@@ -2,13 +2,14 @@
 
 关于用户态中断是路由给线程还是路由给核的问题。
 
-原本的设猜想是哪个线程注册了用户态中断，就路由给哪个线程，即中断跟核走。
+原本的设想是哪个线程注册了用户态中断，就路由给哪个线程，即中断跟核走。
 
 从tokio的实验现象来看，好像也是这样。（也有可能是因为线程一直都运行在了同一个核上）
 
 
 ==========
-但是从《Extended User Interrupts (xUI): Fast and Flexible  Notification without Polling》这篇论文的描述，中断是跟着核走的。
+
+从《Extended User Interrupts (xUI): Fast and Flexible  Notification without Polling》这篇论文的描述，中断是跟着核走的。
 
 论据就是注册的使用使用UPID数据结构中保存的是APICID，用来路由用户态中断到指定的核。
 
@@ -25,6 +26,9 @@ UPID和UITT就是为了解决中断跟核走的问题。
 ```
 To address these limitations, UIPI creates its own orthogonal virtual namespace (thread IDs) and vector space (a 6-bit user vector, or UV). To deliver interrupts in this new namespace, it introduces two new types of data structures that are shared in memory between cores—the per-process UITTs and per-thread UPIDs previously mentioned.
 ```
+
+结论还是用户态中断跟注册的线程走
+
 ============
 
 ## NV和UV
