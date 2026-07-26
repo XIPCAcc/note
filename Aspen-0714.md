@@ -123,31 +123,10 @@ sudo ./iokerneld simple noht nobw
 Aspen (主项目)
 ├── Aspen-KB: 内核旁路用户态运行时
 │   ├── iokernel/     # 调度器核心
+│   ├── ksched/       # 内核模块
 │   ├── runtime/      # 用户态运行时
 │   ├── apps/         # 应用层
 │   └── breakwater/   # DataFrame 应用
-│
-├── Aspen-Go: Go 运行时扩展
-│   ├── go/           # 修改后的 Go 1.21 运行时
-│   └── badger-bench/ # BadgerDB 基准测试
-│
-└── concord: 抢占机制评估
-    └── benchmarks/   # 微基准测试
-
-iokerneld (iokernel/main.c)
-    │
-    ├── 检测 CPU 拓扑 (base/cpu.c)
-    ├── 初始化 DPDK 网络 (iokernel/dpdk.c)
-    ├── 加载 ksched 模块 (ksched/ksched.c)
-    ├── 创建控制线程 (iokernel/control.c)
-    └── 启动调度循环 (iokernel/sched.c)
-
-Runtime App
-    │
-    ├── 映射共享内存 (base/mem.c)
-    ├── 注册到 IOKernel (runtime/init.c)
-    ├── 创建 kthread (runtime/kthread.c)
-    └── 执行用户代码
 ```
 
 ### IOKernel 层（调度器核心）

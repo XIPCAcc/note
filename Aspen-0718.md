@@ -183,7 +183,7 @@ jmp_thread(th);
 
 核心是一个独立的 timer pthread，定期检查每个kthread 是否需要被抢占。
 
-定时器线程 uintr_timer 是一个 独立的 Linux pthread （不是 uthread），绑定到专用的 timer_core CPU。
+定时器线程 uintr_timer 是一个 独立的 Linux pthread，绑定到专用的 timer_core CPU。
 
 ```
 timer_core 上的 pthread 主循环:
@@ -256,29 +256,181 @@ ui_handler(...) {
 
 ## uthread
 
-### 一、创建与启动
+### 创建与启动
 
 | API | 说明 |
 |-----|------|
-| `thread_create(fn, arg)` | 创建 uthread，分配栈空间，初始化 trap frame，**手动**加入 runqueue |
+| `thread_create(fn, arg)` | 创建 uthread，分配栈空间，初始化 trap frame，手动加入 runqueue |
 | `thread_create_with_buf(fn, &buf, len)` | 同上，但栈顶预留一段 buffer 供 uthread 使用 |
-| `thread_spawn(fn, arg)` | 创建**并自动**将 uthread 加入 runqueue（`thread_create` + `thread_ready`） |
+| `thread_spawn(fn, arg)` | 创建并自动将 uthread 加入 runqueue（`thread_create` + `thread_ready`） |
 
 `thread_spawn` 是最常用的高层接口，相当于创建并立即调度。
 
-### 二、调度控制
+### 调度控制
 
 | API | 说明 |
 |-----|------|
-| `thread_ready(th)` | 将 uthread 加入当前 kthread 的 **rq 队尾**，按 FIFO 被调度 |
-| `thread_ready_head(th)` | 加入 **rq 队头**，优先被调度（用于软中断等紧急 uthread） |
+| `thread_ready(th)` | 将 uthread 加入当前 kthread 的 rq 队尾，按 FIFO 被调度 |
+| `thread_ready_head(th)` | 加入 rq 队头，优先被调度（用于软中断等紧急 uthread） |
 | `thread_yield()` | 当前 uthread 主动让出 CPU，将自身加入 rq 队尾，跳回调度器 |
 | `thread_preempt_yield()` | 同上，但加入的是 `preempted_rq`（被抢占队列），而非普通 rq |
 
-### 三、阻塞与退出
+### 阻塞与退出
 
 | API | 说明 |
 |-----|------|
 | `thread_park_and_unlock_np(l)` | 释放自旋锁，阻塞当前 uthread（不加入任何队列），跳回调度器 |
 | `thread_park_and_preempt_enable()` | 开启抢占并阻塞当前 uthread |
-| `thread_exit()` | 终止当前 uthread，释放栈空间，跳回调度器，**永不返回** |
+| `thread_exit()` | 终止当前 uthread，释放栈空间，跳回调度器，永不返回 |
+
+### softirq
+
+#### iokernel_softirq
+
+iokernel_softirq_poll 是 IOKernel 软中断 uthread 的核心轮询函数 。
+
+它从 IOKernel → Runtime 的 LRPC 通道（ k->rxq ）消费消息，处理网络数据包。
+
+当 IOKernel 有数据到达时，调度器通过 softirq_run_locked 将其放进 rq 队头，它被调度执行后调用此函数。
+
+
+```c
+static void iokernel_softirq(void *arg)
+{
+	struct kthread *k = arg;
+
+	while (true) {
+        // 处理缓冲区的消息
+		iokernel_softirq_poll(k);
+		preempt_disable();
+		k->iokernel_busy = false;
+        // 将当前 uthread 阻塞并让出 CPU 的函
+		thread_park_and_preempt_enable();
+	}
+}
+
+static void iokernel_softirq_poll(struct kthread *k)
+{
+	while (true) {
+		if (!lrpc_recv(&k->rxq, &cmd, &payload))
+			break;
+
+		switch (cmd) {
+		case RX_NET_RECV:
+			hdr = shmptr_to_ptr(&netcfg.rx_region,
+					    (shmptr_t)payload,
+					    MBUF_DEFAULT_LEN);
+			m = net_rx_alloc_mbuf(hdr);
+			if (unlikely(!m)) {
+				STAT(DROPS)++;
+				continue;
+			}
+			net_rx_one(m);
+			break;
+
+		case RX_NET_COMPLETE:
+			mbuf_free((struct mbuf *)payload);
+			break;
+
+		case RX_REFILL_BUFS:
+			BUG_ON(!net_ops.trigger_rx_refill);
+			net_ops.trigger_rx_refill();
+			break;
+
+		default:
+			panic("net: invalid RXQ cmd '%ld'", cmd);
+		}
+	}
+}
+```
+
+runtime 通过轮询的方式读取共享缓冲区内容，轮询的时间点是每次schduler选择下一个uthread的循环，且优先级低于当前所有rq队列中的uthread。
+
+如果当前runtime所有的kthread都处于阻塞态，iokernel_softirq如何触发?
+
+IOKernel 有专门的唤醒机制，保证当所有 kthread 都 park 时，新数据到达能唤醒一个 kthread 来处理。
+
+```
+网卡收到数据包
+  │
+  ▼
+dataplane_loop() [iokernel/main.c]
+  │
+  └─→ rx_burst() [iokernel/rx.c]
+       │   rte_eth_rx_burst() 拉取数据包
+       │
+       └─→ rx_send_to_runtime() [iokernel/rx.c#L58]
+            │
+            ├─ sched_threads_active(p) > 0 ?
+            │   │  flow_tbl 选一个活跃 kthread，直接 lrpc_send  + poll 通知
+            │   │  → 目标 kthread 的 softirq_run_locked 检测到 → thread_ready_head(iokernel_softirq)
+            │
+            └─ sched_threads_active(p) == 0  ← 全部 park 了
+                 │
+                 ├─ sched_add_core(p)        ← 唤醒一个 kthread！
+                 │     │
+                 │     └─→ sched_ops->notify_core_needed()
+                 │           │
+                 │           └─→ [simple|ias]_add_kthread()
+                 │                 │
+                 │                 └─→ sched_run_on_core()      [iokernel/sched.c#L204]
+                 │                       │
+                 │                       ├─ sched_pick_kthread()        选最优 idle kthread
+                 │                       │   (优先上次跑的核 → sibling核 → LRU)
+                 │                       ├─ sched_enable_kthread()      标记 active
+                 │                       └─ __sched_run() → ksched_run(core, tid)
+                 │                            写共享内存: gen++, tid 
+                 │
+                 └─ 同时 lrpc_send(&th->rxq, ...) 写消息到 LRPC
+IOkernel接收到数据会创建唤醒runtime
+
+或者在slow pass 阶段
+sched_poll() 被 main.c 的 dataplane_loop 每轮调用
+  │
+  ├─ [每 10us] slow pass
+  │   ├─ sched_measure_delay(p)  ← 测量延迟 + 汇报拥塞
+  │   └─ (触发 notify_congested → 可能 sched_add_core 唤醒 park 的 kthread)
+  │
+  ├─ [每轮] fast pass
+  │   ├─ ksched_poll_run_done()      检查上下文切换是否完成
+  │   ├─ ksched_poll_idle()          检测核心空闲
+  │   └─ sched_try_fast_rewake()     尝试快速重唤醒
+  │
+  └─ [每轮] final pass
+      └─ 调度策略决定 CPU 分配
+- 调用周期 ： IOKERNEL_POLL_INTERVAL = 10 微秒 （ defs.h#L53 ），即每 10us 测量一次
+- 调用范围 ：遍历所有 dataplane client（ dp.clients ），对每个 Runtime 进程调用一次
+```
+
+#### timer_softirq
+
+```c
+static void timer_softirq(void *arg)
+{
+	while (true) {
+		preempt_disable();
+		timer_softirq_one(k);
+		k->timer_busy = false;
+		thread_park_and_preempt_enable();
+	}
+}
+```
+
+
+#### storage_softirq
+
+```c
+void storage_softirq(void *arg)
+{
+	while (true) {
+		preempt_disable();
+		do {
+			spin_lock(&q->lock);
+			ret = storage_softirq_one(q);
+			spin_unlock(&q->lock);
+		} while (!preempt_needed() && ret > 0);
+		k->storage_busy = false;
+		thread_park_and_preempt_enable();
+	}
+}
+```
