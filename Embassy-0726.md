@@ -25,7 +25,7 @@ x86/x86-64 用 lock cmpxchg{q}（push 的 CAS 循环）+ lock xchg/q（take_all 
 
             loop {
                 unsafe {
-                    CLUI();
+                    CLUI();  // Read Copy Update 解决每次需要进入临界区的问题
                     if queue.empty() {
                         // 需要x86架构保证了"stui + 下一条指令"的原子性。执行后，要等 下一条指令 执行完毕之后，才会响应中断
                         STUI();
