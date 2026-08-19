@@ -258,8 +258,10 @@ fn turn(&mut self, handle: &Handle, max_wait: Option<Duration>) {
 ```
 
 
-总而言之，压缩中间过程，可以理解为等待任务的waker 地址被当做标志注册到epoll，Reactor返回读取外部事件返回event是， event的数据存储了waker的地址，从而能够唤醒对应的协程。
+总而言之，压缩中间过程，可以理解为等待任务的waker 地址被当做标志注册到epoll，Reactor读取外部事件返回event， event的数据存储了waker的地址，从而能够唤醒对应的协程。
 
-这个是基于epoll实现tokio 设计的Reactor比较巧妙的部分，对于一般的基于epoll的异步运行时，Reactor的设计是通过 fd → HashMap<waker> 间接查找。
+这个是基于epoll实现tokio 设计的Reactor比较巧妙的部分。
+
+对于一般的基于epoll的异步运行时而言，Reactor还可以设计通过 fd → HashMap<waker> 间接查找waker。
 
 以上是对epoll Reactor中事件与waker映射模式的分析。
