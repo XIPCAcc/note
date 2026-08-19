@@ -38,3 +38,18 @@ x86/x86-64 用 lock cmpxchg{q}（push 的 CAS 循环）+ lock xchg/q（take_all 
             }
         }
 ```
+
+# 多核
+
+Embassy 的多核模型是thread-per-core（每核一线程）架构
+
+thread-per-core（也叫 shared-nothing）是一种并发架构：
+
+每个核心跑一个专用执行线程，每线程持有自己独立的状态（队列、缓存、分配器），线程之间不共享可变状态，只通过显式的消息传递/队列通信。
+
+特征：
+
+无锁争用（状态不共享，不需要全局锁）
+亲和性（数据/外设固定在某个核上）
+显式通信（跨核走 channel / IPC）
+无 work-stealing（不做任务窃取）
