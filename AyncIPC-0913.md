@@ -11,7 +11,7 @@ if (! queue.empty()) {
 
 时间2
 
-syscall yield() {
+syscall uintr_wait() {
 
 时间3
 
