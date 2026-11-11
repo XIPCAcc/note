@@ -1,6 +1,6 @@
 以PS2 键盘为例，分析ctrl-c如何终止当前进程
 
-PS2键盘按下后，8042芯片会向CPU发送一个中断，中断好为IRQ1，中断处理函数为i8042_interrupt。
+PS2键盘按下后，8042芯片会向CPU发送一个中断，中断号为IRQ1，中断处理函数为i8042_interrupt。
 
 ```c
 error = request_irq(I8042_KBD_IRQ, i8042_interrupt, IRQF_SHARED,
@@ -102,6 +102,21 @@ static void put_queue(struct vc_data *vc, int ch)
 	// 将内容写入tty_buffer，将work struct 挂到queue_work，然后退出中断上下文
     tty_flip_buffer_push(&vc->port);
 }
+
+void tty_flip_buffer_push(struct tty_port *port)
+{
+	struct tty_bufhead *buf = &port->buf;
+
+	tty_flip_buffer_commit(buf->tail);
+	queue_work(system_unbound_wq, &buf->work);
+}
+
+put_queue(vc, 0x03)              ← keyboard.c:325
+  └─ tty_insert_flip_char()      ← 把 0x03 写入 flip buffer 环形队列
+  └─ tty_flip_buffer_push()      ← drivers/tty/tty_buffer.c:599
+       └─ queue_work(system_unbound_wq, &buf->work)
+            └─ insert_work(pwq, work, worklist, work_flags);
+			    └─wake_up_worker(pool)   ← 唤醒 worker 线程
 ```
 
 ## kworker
@@ -498,10 +513,11 @@ EXPORT_SYMBOL_GPL(uintr_kern_notify);
 创建一个 /proc/sys/kernel/uintr_notify_isig sysctl节点控制该功能的开关
 
 ```bash
-cat /proc/sys/kernel/uintr_notify_isig
-
-echo 1 | sudo tee /proc/sys/kernel/uintr_notify_isig   # 启用
-echo 0 | sudo tee /proc/sys/kernel/uintr_notify_isig   # 禁用
+make O=build -j16 && sudo make O=build modules_install install
+# 重启后
+cat /proc/sys/kernel/uintr_isig_mode
+echo 0 | sudo tee /proc/sys/kernel/uintr_isig_mode
+echo 1 | sudo tee /proc/sys/kernel/uintr_isig_mode
 ```
 
 运行后查看日志
